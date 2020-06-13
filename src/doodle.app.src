@@ -3,7 +3,7 @@
                              kazoo_data,kazoo_documents,kazoo_endpoint,
                              kazoo_im,kazoo_numbers,kazoo_stdlib,kernel,lager,
                              stdlib]},
-              {description,"doodle - sms store and forward"},
+              {description,"Doodle: SMS store and forward"},
               {env,[{is_kazoo_app,true}]},
               {mod,{doodle_app,[]}},
               {modules,[]},
