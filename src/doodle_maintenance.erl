@@ -30,7 +30,7 @@ send_outbound_sms(To, Msg) ->
 -spec send_outbound_sms(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binary()) -> 'ok'.
 send_outbound_sms(To, From, Msg) ->
     Payload = [{<<"Message-ID">>, kz_binary:rand_hex(16)}
-              ,{<<"System-ID">>, kz_util:node_name()}
+              ,{<<"System-ID">>, kz_nodes:node_name()}
               ,{<<"From">>, From}
               ,{<<"To">>, kz_term:to_binary(To)}
               ,{<<"Body">>, Msg}
