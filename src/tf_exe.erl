@@ -241,7 +241,7 @@ handle_info(_Msg, State) ->
 %% @doc Handle call messages, sometimes forward them on.
 %% @end
 %%------------------------------------------------------------------------------
--spec handle_event(kz_call_event:doc(), state()) -> 'ok'.
+-spec handle_event(kz_call_event:payload(), state()) -> 'ok'.
 handle_event(JObj, #state{tf_module_pid=PidRef
                          ,call=Im
                          }) ->
