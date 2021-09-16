@@ -170,7 +170,7 @@ handle_message(JObj, Props) ->
             handle_inbound(Context);
         'false' ->
             lager:debug("error validating inbound message : ~p", [JObj]),
-            gen_listener:nack(Srv, Deliver)
+            gen_listener:ack(Srv, Deliver)
     end.
 
 -spec inbound_context(kz_json:object(), kz_term:proplist()) -> context().

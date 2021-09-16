@@ -110,6 +110,7 @@ create_im_endpoint(Endpoint, _Properties, Im) ->
       ,{<<"To-Realm">>, kzd_devices:sip_realm(Endpoint, kapps_im:account_realm(Im))}
       ,{<<"To-DID">>, kapps_im:to(Im)}
       ,{<<"Endpoint-ID">>, kzd_endpoint:id(Endpoint)}
+      ,{<<"Account-ID">>, kzd_endpoint:account_id(Endpoint)}
       ,{<<"Invite-Format">>, kzd_devices:sip_invite_format(Endpoint)}
       ]).
 
