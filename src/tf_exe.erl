@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2010-2020, 2600Hz
+%%% @copyright (C) 2010-2022, 2600Hz
 %%% @doc
 %%% @author Karl Anderson
 %%%
@@ -16,6 +16,8 @@
 -export([start_link/2]).
 -export([queue_name/1]).
 -export([continue/1, continue/2]).
+-export([branch/2]).
+-export([next/2]).
 -export([stop/1, stop/2]).
 
 %% gen_server callbacks
@@ -29,7 +31,8 @@
 
 -include("doodle.hrl").
 -include_lib("kazoo_stdlib/include/kazoo_json.hrl").
--include_lib("kazoo_amqp/include/kz_api.hrl").
+
+-define(MAX_BRANCH_COUNT, kapps_config:get_integer(?CF_CONFIG_CAT, <<"max_branch_count">>, 50)).
 
 -record(state, {call = kapps_im:new() :: kapps_im:im()
                ,flow = kz_json:new() :: kz_json:object()
@@ -38,7 +41,8 @@
                ,tf_module_old_pid :: kz_term:api_pid_ref()
                ,result = 'undefined' :: atom()
                ,queue :: kz_term:api_ne_binary()
-               ,self = self() :: pid()
+               ,branch_count = ?MAX_BRANCH_COUNT :: non_neg_integer()
+               ,cause = undefined :: term()
                }).
 -type state() :: #state{}.
 
@@ -67,6 +71,20 @@ continue(Key, Srv) when is_pid(Srv) ->
 continue(Key, Im) ->
     Srv = tf_exe_pid(Im),
     continue(Key, Srv).
+
+-spec next(kz_json:object(), kapps_im:im() | pid()) -> 'ok'.
+next(Flow, Srv) when is_pid(Srv) ->
+    gen_server:cast(Srv, {'next', Flow});
+next(Flow, Im) ->
+    Srv = tf_exe_pid(Im),
+    next(Flow, Srv).
+
+-spec branch(kz_json:object(), kapps_im:im() | pid()) -> 'ok'.
+branch(Flow, Srv) when is_pid(Srv) ->
+    gen_server:cast(Srv, {'branch', Flow});
+branch(Flow, Im) ->
+    Srv = tf_exe_pid(Im),
+    branch(Flow, Srv).
 
 -spec stop(kapps_im:im() | pid()) -> 'ok'.
 stop(Srv) ->
@@ -128,11 +146,9 @@ handle_call(_Request, _From, State) ->
 %%------------------------------------------------------------------------------
 -spec handle_cast(any(), state()) -> kz_types:handle_cast_ret_state(state()).
 handle_cast({'continue', Key}, #state{flow=Flow}=State) ->
-    lager:info("continuing to child '~s'", [Key]),
-
     case kz_json:get_value([<<"children">>, Key], Flow) of
         'undefined' when Key =:= ?DEFAULT_CHILD_KEY ->
-            lager:info("wildcard child does not exist, we are lost... exiting"),
+            lager:info("wildcard child does not exist, exiting"),
             stop(self()),
             {'noreply', State};
         'undefined' ->
@@ -140,10 +156,45 @@ handle_cast({'continue', Key}, #state{flow=Flow}=State) ->
             continue(self()),
             {'noreply', State};
         NewFlow ->
+            lager:info("continuing to child '~s'", [Key]),
             {'noreply', launch_tf_module(State#state{flow=NewFlow})}
     end;
-handle_cast({'stop', Cause}, State) ->
+handle_cast({'next', NewFlow}, State) ->
+    lager:info("textflow has been reset"),
+    {'noreply', launch_tf_module(State#state{flow=NewFlow})};
+handle_cast({'branch', _NewFlow}, #state{branch_count=BC}=State) when BC =< 0 ->
+    lager:warning("textflow exceeded max branch count, terminating"),
+    {'stop', 'normal', State};
+handle_cast({'branch', NewFlow}, #state{flow=Flow
+                                       ,flows=Flows
+                                       ,branch_count=BC
+                                       }=State) ->
+    lager:info("textflow has been branched"),
+    case kz_json:get_ne_value([<<"children">>, ?DEFAULT_CHILD_KEY], Flow) of
+        'undefined' ->
+            {'noreply', launch_tf_module(State#state{flow=NewFlow
+                                                    ,branch_count=BC-1
+                                                    })};
+        PrevFlow ->
+            {'noreply', launch_tf_module(State#state{flow=NewFlow
+                                                    ,flows=[PrevFlow|Flows]
+                                                    ,branch_count=BC-1
+                                                    }
+                                        )
+            }
+    end;
+handle_cast({'stop', delivered}, State) ->
+    {'stop', {shutdown, delivered}, State};
+handle_cast({'stop', undefined}, #state{flows=[], cause = Cause}=State) ->
     {'stop', {shutdown, Cause}, State#state{result=Cause}};
+handle_cast({'stop', Cause}, #state{flows=[]}=State) ->
+    {'stop', {shutdown, Cause}, State#state{result=Cause}};
+handle_cast({'stop', undefined}, #state{flows=[Flow|Flows]}=State) ->
+    lager:info("asked to stop but the spice must flow"),
+    {'noreply', launch_tf_module(State#state{flow=Flow, flows=Flows})};
+handle_cast({'stop', Cause}, #state{flows=[Flow|Flows]}=State) ->
+    lager:info("asked to stop(~s) but the spice must flow", [Cause]),
+    {'noreply', launch_tf_module(State#state{flow=Flow, flows=Flows, cause=Cause})};
 handle_cast('initialize', State) ->
     initialize(State);
 handle_cast(_Msg, State) ->
@@ -165,13 +216,13 @@ handle_info({'DOWN', Ref, 'process', Pid, 'normal'}, #state{tf_module_pid={Pid, 
                                                            ,call=Im
                                                            }=State) ->
     erlang:demonitor(Ref, ['flush']),
-    lager:debug("cf module ~s down normally", [kapps_im:kvs_fetch('tf_last_action', Im)]),
+    lager:debug("tf module ~s down normally", [kapps_im:kvs_fetch('tf_last_action', Im)]),
     {'noreply', State#state{tf_module_pid='undefined'}};
 handle_info({'DOWN', Ref, 'process', Pid, 'killed'}, #state{tf_module_pid={Pid, Ref}
                                                            ,call=Im
                                                            }=State) ->
     erlang:demonitor(Ref, ['flush']),
-    lager:debug("cf module ~s down normally", [kapps_im:kvs_fetch('tf_last_action', Im)]),
+    lager:debug("tf module ~s down normally", [kapps_im:kvs_fetch('tf_last_action', Im)]),
     {'noreply', State#state{tf_module_pid='undefined'}};
 handle_info({'DOWN', Ref, 'process', Pid, _Reason}, #state{tf_module_pid={Pid, Ref}
                                                           ,call=Im
@@ -187,13 +238,13 @@ handle_info({'EXIT', Pid, 'normal'}, #state{tf_module_pid={Pid, Ref}
                                            ,call=Im
                                            }=State) ->
     erlang:demonitor(Ref, ['flush']),
-    lager:debug("cf module ~s down normally", [kapps_im:kvs_fetch('tf_last_action', Im)]),
+    lager:debug("tf module ~s down normally", [kapps_im:kvs_fetch('tf_last_action', Im)]),
     {'noreply', State#state{tf_module_pid='undefined'}};
 handle_info({'EXIT', Pid, 'killed'}, #state{tf_module_pid={Pid, Ref}
                                            ,call=Im
                                            }=State) ->
     erlang:demonitor(Ref, ['flush']),
-    lager:debug("cf module ~s killed normally", [kapps_im:kvs_fetch('tf_last_action', Im)]),
+    lager:debug("tf module ~s killed normally", [kapps_im:kvs_fetch('tf_last_action', Im)]),
     {'noreply', State#state{tf_module_pid='undefined'}};
 handle_info({'EXIT', Pid, _Reason}, #state{tf_module_pid={Pid, Ref}
                                           ,call=Im
@@ -207,13 +258,13 @@ handle_info({'EXIT', Pid, 'normal'}, #state{tf_module_old_pid={Pid, Ref}
                                            ,call=Im
                                            }=State) ->
     erlang:demonitor(Ref, ['flush']),
-    lager:debug("cf module ~s down normally", [kapps_im:kvs_fetch('tf_old_action', Im)]),
+    lager:debug("tf module ~s down normally", [kapps_im:kvs_fetch('tf_old_action', Im)]),
     {'noreply', State#state{tf_module_old_pid='undefined'}};
 handle_info({'EXIT', Pid, 'killed'}, #state{tf_module_old_pid={Pid, Ref}
                                            ,call=Im
                                            }=State) ->
     erlang:demonitor(Ref, ['flush']),
-    lager:debug("cf module ~s killed normally", [kapps_im:kvs_fetch('tf_old_action', Im)]),
+    lager:debug("tf module ~s killed normally", [kapps_im:kvs_fetch('tf_old_action', Im)]),
     {'noreply', State#state{tf_module_old_pid='undefined'}};
 handle_info({'EXIT', Pid, _Reason}, #state{tf_module_old_pid={Pid, Ref}
                                           ,call=Im
