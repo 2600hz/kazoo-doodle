@@ -10,6 +10,7 @@
 -define(APP_NAME, <<"doodle">>).
 -define(APP_VERSION, <<"4.0.0">>).
 -define(CONFIG_CAT, ?APP_NAME).
+-define(CF_CONFIG_CAT, <<"callflow">>).
 
 -define(CACHE_NAME, 'doodle_cache').
 
@@ -54,17 +55,12 @@
 -define(OUTBOUND_EXCHANGE_ARG(K),[<<"default">>, <<"outbound">>, <<"pool">>, <<"exchange">>, K]).
 
 
--ifdef(OTP_RELEASE).
-%% >= OTP 21
 -define(CATCH(Type, Reason, Stacktrace), Type:Reason:Stacktrace).
 -define(LOGSTACK(Stacktrace), kz_log:log_stacktrace(Stacktrace)).
--else.
-%% =< OTP 20
--define(CATCH(Type, Reason, Stacktrace), Type:Reason).
--define(LOGSTACK(Stacktrace), kz_log:log_stacktrace()).
--endif.
 
 -define(DEFAULT_CHILD_KEY, <<"_">>).
+
+
 
 -define(DOODLE_HRL, 'true').
 -endif.
